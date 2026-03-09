@@ -1,0 +1,29 @@
+name: repo-info
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  show-info:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show repository, user, date, memory and disk
+        run: |
+          echo "===== REPOSITORY INFO ====="
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "Pushed by: $GITHUB_ACTOR"
+
+          echo "===== CURRENT DATE ====="
+          date
+
+          echo "===== MEMORY USAGE ====="
+          free -h
+
+          echo "===== DISK USAGE ====="
+          df -h
+
