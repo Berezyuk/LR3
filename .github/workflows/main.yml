@@ -1,3 +1,4 @@
+
 name: .NET CI Pipeline with Security Scan
 
 on:
@@ -10,16 +11,16 @@ jobs:
     
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4  # Обновлено до v4
 
     - name: Setup .NET
-      uses: actions/setup-dotnet@v3
+      uses: actions/setup-dotnet@v4  # Обновлено до v4
       with:
         dotnet-version: '8.0.x'
 
     - name: Create project file
       run: |
-        # Создаем файл проекта, так как в задании дан только код
+        # Создаем файл проекта
         dotnet new console -n SqlInjectionDemo -f net8.0
         mv SqlInjectionDemo/* ./
         rm -rf SqlInjectionDemo
@@ -95,7 +96,7 @@ jobs:
 
     - name: Run SecurityCodeScan analysis
       run: dotnet build --no-restore /p:RunAnalyzers=true
-      continue-on-error: true  # Позволяет сохранить результат для проверки
+      continue-on-error: true
 
     - name: Check for vulnerabilities
       run: |
@@ -118,7 +119,9 @@ jobs:
 
     - name: Upload security report
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4  # ИСПРАВЛЕНО: теперь v4
       with:
         name: security-report
         path: security_report.txt
+        retention-days: 5  # Новое: указываем срок хранения
+        if-no-files-found: warn  # Новое: поведение, если файл не найден
