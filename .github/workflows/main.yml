@@ -1,29 +1,124 @@
-name: repo-info
+name: .NET CI Pipeline with Security Scan
 
 on:
   push:
-    branches: [ "main" ]
-  workflow_dispatch:
+    branches: [ main ]
 
 jobs:
-  show-info:
+  build-and-scan:
     runs-on: ubuntu-latest
-
+    
     steps:
-      - uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v3
 
-      - name: Show repository, user, date, memory and disk
-        run: |
-          echo "===== REPOSITORY INFO ====="
-          echo "Repository: $GITHUB_REPOSITORY"
-          echo "Pushed by: $GITHUB_ACTOR"
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: '8.0.x'
 
-          echo "===== CURRENT DATE ====="
-          date
+    - name: Create project file
+      run: |
+        # Создаем файл проекта, так как в задании дан только код
+        dotnet new console -n SqlInjectionDemo -f net8.0
+        mv SqlInjectionDemo/* ./
+        rm -rf SqlInjectionDemo
+        # Заменяем Program.cs на предоставленный код
+        cat > Program.cs << 'EOF'
+        using System;
+        using System.Data.SqlClient;
 
-          echo "===== MEMORY USAGE ====="
-          free -h
+        namespace SqlInjectionDemo
+        {
+            class Program
+            {
+                static void Main(string[] args)
+                {
+                    Console.WriteLine("Введите имя пользователя:");
+                    string username = Console.ReadLine();
 
-          echo "===== DISK USAGE ====="
-          df -h
+                    Console.WriteLine("Введите пароль:");
+                    string password = Console.ReadLine();
 
+                    // 🔴 Уязвимость 1: SQL-инъекция
+                    string query = $"SELECT * FROM Users WHERE Username = '{username}' AND Password = '{password}'";
+                    bool isAuthenticated = CheckCredentials(query);
+
+                    if (isAuthenticated)
+                    {
+                        Console.WriteLine("Авторизация успешна!");
+                    }
+                    else
+                    {
+                        Console.WriteLine("Неверный логин или пароль.");
+                    }
+
+                    // 🔴 Уязвимость 2: Открытое соединение без using
+                    var connection = new SqlConnection("Server=myServer;Database=myDB;User Id=myUser;Password=myPass;");
+                    connection.Open();
+
+                    // 🔴 Уязвимость 3: Хранение пароля в открытом виде
+                    string updatePasswordQuery = $"UPDATE Users SET Password = '{password}' WHERE Username = '{username}'";
+                    var command = new SqlCommand(updatePasswordQuery, connection);
+                    command.ExecuteNonQuery();
+
+                    // 🔴 Уязвимость 4: Отсутствие обработки ошибок
+                    Console.WriteLine("Пароль обновлён.");
+                    connection.Close();
+                }
+
+                static bool CheckCredentials(string query)
+                {
+                    // 🔴 Уязвимость 5: Использование строкового соединения
+                    using (var connection = new SqlConnection("Server=myServer;Database=myDB;User Id=myUser;Password=myPass;"))
+                    {
+                        var command = new SqlCommand(query, connection);
+                        connection.Open();
+                        var reader = command.ExecuteReader();
+                        return reader.HasRows;
+                    }
+                }
+            }
+        }
+        EOF
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Install SecurityCodeScan
+      run: |
+        dotnet add package SecurityCodeScan
+        dotnet restore
+
+    - name: Build project
+      run: dotnet build --no-restore --configuration Release
+
+    - name: Run SecurityCodeScan analysis
+      run: dotnet build --no-restore /p:RunAnalyzers=true
+      continue-on-error: true  # Позволяет сохранить результат для проверки
+
+    - name: Check for vulnerabilities
+      run: |
+        # Создаем временный проект для анализа с SecurityCodeScan
+        dotnet new console -n SecurityScan -f net8.0
+        cd SecurityScan
+        dotnet add package SecurityCodeScan
+        dotnet add reference ../SqlInjectionDemo.csproj
+        
+        # Запускаем анализ и сохраняем результат
+        if dotnet build /p:RunAnalyzers=true /p:WarningLevel=5 2>&1 | tee ../security_report.txt | grep -i "SQL" || [ ${PIPESTATUS[0]} -eq 0 ]; then
+          if grep -q "error" ../security_report.txt || grep -q "warning" ../security_report.txt; then
+            echo "❌ Обнаружены уязвимости!"
+            cat ../security_report.txt
+            exit 1
+          else
+            echo "✅ Уязвимости не обнаружены"
+          fi
+        fi
+
+    - name: Upload security report
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-report
+        path: security_report.txt
