@@ -1,4 +1,3 @@
-
 name: .NET CI Pipeline with Security Scan
 
 on:
@@ -11,20 +10,27 @@ jobs:
     
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4  # Обновлено до v4
+      uses: actions/checkout@v4
 
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4  # Обновлено до v4
+      uses: actions/setup-dotnet@v4
       with:
         dotnet-version: '8.0.x'
 
-    - name: Create project file
+    - name: Create project file with all dependencies
       run: |
-        # Создаем файл проекта
+        # Создаем новый проект
         dotnet new console -n SqlInjectionDemo -f net8.0
+        # Перемещаем файлы
         mv SqlInjectionDemo/* ./
         rm -rf SqlInjectionDemo
-        # Заменяем Program.cs на предоставленный код
+        
+        # ✅ Добавляем необходимые пакеты
+        dotnet add package System.Data.SqlClient --version 4.8.6
+        # Используем актуальную версию SecurityCodeScan
+        dotnet add package SecurityCodeScan --version 5.6.7
+        
+        # Создаем Program.cs с исправлениями для nullable-типов
         cat > Program.cs << 'EOF'
         using System;
         using System.Data.SqlClient;
@@ -36,10 +42,14 @@ jobs:
                 static void Main(string[] args)
                 {
                     Console.WriteLine("Введите имя пользователя:");
-                    string username = Console.ReadLine();
+                    // ✅ Исправляем nullable warning
+                    string? username = Console.ReadLine();
+                    username = username ?? string.Empty;
 
                     Console.WriteLine("Введите пароль:");
-                    string password = Console.ReadLine();
+                    // ✅ Исправляем nullable warning
+                    string? password = Console.ReadLine();
+                    password = password ?? string.Empty;
 
                     // 🔴 Уязвимость 1: SQL-инъекция
                     string query = $"SELECT * FROM Users WHERE Username = '{username}' AND Password = '{password}'";
@@ -82,46 +92,39 @@ jobs:
             }
         }
         EOF
+        
+        # Показываем содержимое csproj для проверки
+        echo "=== Project file content ==="
+        cat SqlInjectionDemo.csproj
 
     - name: Restore dependencies
       run: dotnet restore
-
-    - name: Install SecurityCodeScan
-      run: |
-        dotnet add package SecurityCodeScan
-        dotnet restore
 
     - name: Build project
       run: dotnet build --no-restore --configuration Release
 
     - name: Run SecurityCodeScan analysis
-      run: dotnet build --no-restore /p:RunAnalyzers=true
-      continue-on-error: true
-
-    - name: Check for vulnerabilities
       run: |
-        # Создаем временный проект для анализа с SecurityCodeScan
-        dotnet new console -n SecurityScan -f net8.0
-        cd SecurityScan
-        dotnet add package SecurityCodeScan
-        dotnet add reference ../SqlInjectionDemo.csproj
-        
+        echo "=== Running Security Analysis ==="
         # Запускаем анализ и сохраняем результат
-        if dotnet build /p:RunAnalyzers=true /p:WarningLevel=5 2>&1 | tee ../security_report.txt | grep -i "SQL" || [ ${PIPESTATUS[0]} -eq 0 ]; then
-          if grep -q "error" ../security_report.txt || grep -q "warning" ../security_report.txt; then
-            echo "❌ Обнаружены уязвимости!"
-            cat ../security_report.txt
-            exit 1
-          else
-            echo "✅ Уязвимости не обнаружены"
-          fi
+        dotnet build /p:RunAnalyzers=true /p:WarningLevel=5 2>&1 | tee security_report.txt
+        
+        # Проверяем наличие уязвимостей
+        if grep -q "warning SCS" security_report.txt; then
+          echo "❌ Обнаружены уязвимости безопасности!"
+          echo "======================================"
+          grep -E "warning SCS[0-9]+" security_report.txt
+          echo "======================================"
+          exit 1
+        else
+          echo "✅ Уязвимости не обнаружены"
         fi
 
     - name: Upload security report
       if: always()
-      uses: actions/upload-artifact@v4  # ИСПРАВЛЕНО: теперь v4
+      uses: actions/upload-artifact@v4
       with:
         name: security-report
         path: security_report.txt
-        retention-days: 5  # Новое: указываем срок хранения
-        if-no-files-found: warn  # Новое: поведение, если файл не найден
+        retention-days: 7
+        if-no-files-found: warn
